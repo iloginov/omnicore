@@ -2576,6 +2576,64 @@ extern UniValue importwallet(const UniValue& params, bool fHelp);
 extern UniValue importprunedfunds(const UniValue& params, bool fHelp);
 extern UniValue removeprunedfunds(const UniValue& params, bool fHelp);
 
+UniValue get_transaction_utxo(const UniValue& params, bool fHelp)
+{
+    if (!EnsureWalletIsAvailable(fHelp))
+        return NullUniValue;
+
+    if (fHelp || params.size() < 1 || params.size() > 1)
+        throw runtime_error(
+            "get_transaction_utxo \"txid\"\n"
+            "\nGet detailed information about transaction <txid>\n"
+            "\nExamples:\n"
+            + HelpExampleCli("get_transaction_utxo", "\"1075db55d416d3ca199f55b6084e2115b9345e16c5cf302fc80e9d5fbf5d48d\"")
+        );
+
+    uint256 hash;
+    hash.SetHex(params[0].get_str());
+
+    CCoinsView viewDummy;
+    CCoinsViewCache view(&viewDummy);
+    {
+        LOCK(mempool.cs);
+        CCoinsViewCache &viewChain = *pcoinsTip;
+        CCoinsViewMemPool viewMempool(&viewChain, mempool);
+        view.SetBackend(viewMempool); // temporarily switch cache backend to db+mempool view
+        //CCoins coins;
+        view.AccessCoins(hash); // this is certainly allowed to fail
+        view.SetBackend(viewDummy); // switch back to avoid locking mempool for too long
+    }
+
+    const CCoins* coins = view.AccessCoins(hash);
+
+    UniValue results(UniValue::VARR);
+    vector<COutput> vecOutputs;
+
+    for (auto i = 0; i < coins->vout.size(); i++) {
+        if (!coins->vout[i].IsNull()) {
+
+            const auto &out = coins->vout[i];
+
+            CTxDestination address;
+            const CScript& scriptPubKey = out.scriptPubKey;
+            bool fValidAddress = ExtractDestination(scriptPubKey, address);
+
+            UniValue entry(UniValue::VOBJ);
+            entry.push_back(Pair("txid", params[0].get_str()));
+            entry.push_back(Pair("vout", i));
+
+            if (fValidAddress) {
+                entry.push_back(Pair("address", CBitcoinAddress(address).ToString()));
+            }
+
+            entry.push_back(Pair("scriptPubKey", HexStr(scriptPubKey.begin(), scriptPubKey.end())));
+            entry.push_back(Pair("amount", ValueFromAmount(out.nValue)));
+            results.push_back(entry);
+        }
+    }
+    return results;
+}
+
 static const CRPCCommand commands[] =
 { //  category              name                        actor (function)           okSafeMode
     //  --------------------- ------------------------    -----------------------    ----------
@@ -2625,6 +2683,7 @@ static const CRPCCommand commands[] =
     { "wallet",             "walletpassphrasechange",   &walletpassphrasechange,   true  },
     { "wallet",             "walletpassphrase",         &walletpassphrase,         true  },
     { "wallet",             "removeprunedfunds",        &removeprunedfunds,        true  },
+    { "wallet",             "get_transaction_utxo",     &get_transaction_utxo,     false }
 };
 
 void RegisterWalletRPCCommands(CRPCTable &tableRPC)
